@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gameroom</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="cabinet">
+    <header class="marquee">
+      <h1>GAME ROOM</h1>
+      <p>INSERT COIN TO PLAY</p>
+    </header>
+
+    <section class="bezel">
+      <div class="screen">
+        <ul class="cards" id="cards"></ul>
+        <p class="hint">방향키로 선택 · Enter로 시작</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-hidden="true">
+      <div class="joystick"><span class="ball"></span><span class="stick"></span></div>
+      <div class="buttons">
+        <span class="btn red"></span>
+        <span class="btn yellow"></span>
+        <span class="btn blue"></span>
+      </div>
+      <div class="coin"><span>COIN</span></div>
+    </section>
+  </main>
+
+  <script src="main.js"></script>
+</body>
+</html>

@@ -18,17 +18,20 @@
    ```bash
    git clone https://github.com/taegue00-cmyk/gameroom-app.git
    ```
-2. 원하는 게임 폴더의 `index.html`을 브라우저(Chrome, Edge 등)에서 엽니다.
+2. 루트의 `index.html`을 브라우저(Chrome, Edge 등)에서 열고, 카드를 눌러 게임을 선택합니다. 각 게임 폴더의 `index.html`을 직접 열어도 됩니다.
 
 ## 프로젝트 구조
 
 ```
 gameroom-app/
+├── index.html       # 메인 페이지 (오락기 디자인)
+├── main.js
+├── style.css
 ├── Snake game/      # index.html, main.js, style.css
 ├── 솔리테어/         # index.html, main.js, style.css
 ├── 스도쿠/           # index.html, main.js, style.css
 ├── 오목/             # index.html, main.js, style.css
-└── 피카츄 배구/       # index.html (단일 파일)
+└── 피카츄 배구/       # index.html, main.js, style.css
 ```
 
 ## 기술 스택
