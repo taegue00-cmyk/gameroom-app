@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>솔리테어</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="stats"><span>이동: <b id="moves">0</b></span><span>시간: <b id="time">0:00</b></span></div>
+  <div class="btns">
+    <select id="draw"><option value="1">1장 뽑기</option><option value="3">3장 뽑기</option></select>
+    <button id="undo">되돌리기</button>
+    <button id="auto" disabled>자동 완성</button>
+    <button id="new">새 게임</button>
+  </div>
+</header>
+<div id="board">
+  <div class="row">
+    <div class="pile" id="stock" data-pile="stock"></div>
+    <div class="pile" id="waste" data-pile="waste"></div>
+    <div></div>
+    <div class="pile f" data-pile="f0"></div>
+    <div class="pile f" data-pile="f1"></div>
+    <div class="pile f" data-pile="f2"></div>
+    <div class="pile f" data-pile="f3"></div>
+  </div>
+  <div class="row" id="tableau"></div>
+</div>
+<div id="ghost"></div>
+<div id="win"><div><h1>🎉 클리어!</h1><p id="winmsg"></p><button>새 게임</button></div></div>
+<script src="main.js"></script>
+</body>
+</html>

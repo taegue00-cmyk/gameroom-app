@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스도쿠</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="stats"><span>시간: <b id="time">0:00</b></span><span id="msg"></span></div>
+  <div class="btns">
+    <select id="level">
+      <option value="36">쉬움</option>
+      <option value="46" selected>보통</option>
+      <option value="53">어려움</option>
+    </select>
+    <button id="check">검사</button>
+    <button id="hint">힌트</button>
+    <button id="new">새 게임</button>
+  </div>
+</header>
+<div id="grid"></div>
+<div id="pad"></div>
+<script src="main.js"></script>
+</body>
+</html>

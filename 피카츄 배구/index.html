@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>피카츄 배구</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #1e2a3a;
+    color: #eee;
+    font-family: "Malgun Gothic", sans-serif;
+  }
+  h1 { margin: 10px 0; color: #ffd93b; text-shadow: 2px 2px 0 #b8860b; }
+  #controls { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; justify-content: center; }
+  button {
+    padding: 8px 14px;
+    font-size: 15px;
+    border: none;
+    border-radius: 6px;
+    background: #555;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:hover { background: #777; }
+  button.main { background: #e0a800; color: #222; font-weight: bold; }
+  button.main:hover { background: #ffc61a; }
+  canvas {
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.5);
+    max-width: 95vw;
+    height: auto;
+  }
+  #help {
+    margin-top: 12px;
+    display: flex;
+    gap: 30px;
+    flex-wrap: wrap;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  #help div { background: #2b3a4f; padding: 8px 14px; border-radius: 6px; }
+  kbd {
+    background: #eee; color: #222; border-radius: 3px;
+    padding: 0 5px; font-family: inherit; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<h1>⚡ 피카츄 배구 ⚡</h1>
+<div id="controls">
+  <button class="main" id="start1">1인용 (vs 컴퓨터)</button>
+  <button class="main" id="start2">2인용</button>
+  <button id="sound">🔊 소리 켬</button>
+</div>
+<canvas id="game" width="800" height="450"></canvas>
+<div id="help">
+  <div>
+    <b>1P (왼쪽)</b><br>
+    이동 <kbd>D</kbd> <kbd>G</kbd> · 점프 <kbd>R</kbd> · 아래 <kbd>F</kbd> · 스파이크 <kbd>Z</kbd><br>
+    <small>1인용에서는 방향키 + <kbd>Enter</kbd>도 사용 가능</small>
+  </div>
+  <div>
+    <b>2P (오른쪽)</b><br>
+    이동 <kbd>←</kbd> <kbd>→</kbd> · 점프 <kbd>↑</kbd> · 아래 <kbd>↓</kbd> · 스파이크 <kbd>Enter</kbd>
+  </div>
+  <div>
+    <b>스파이크</b>: 점프 중에 스파이크 키<br>
+    방향키를 함께 누르면 강타 방향이 바뀝니다 · 15점 먼저 내면 승리
+  </div>
+</div>
+
+<script>
+// ---------- 상수 ----------
+const W = 800, H = 450;
+const GROUND = 390;
+const NET_X = 400, NET_W = 10, NET_TOP = 245;
+const P_R = 32, B_R = 20;
+const P_SPEED = 6, P_JUMP = -15, P_GRAV = 0.8;
+const B_GRAV = 0.38, B_MAX = 22;
+const WIN_SCORE = 15;
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// ---------- 사운드 ----------
+let soundOn = true, audioCtx = null;
+function tone(freq, dur, vol, type = 'square', slideTo = null) {
+  if (!soundOn) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  gain.gain.setValueAtTime(vol, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + dur);
+}
+const sfx = {
+  hit:    () => tone(520, 0.08, 0.15),
+  spike:  () => { tone(900, 0.25, 0.2, 'sawtooth', 120); tone(60, 0.3, 0.3, 'square', 30); },
+  jump:   () => tone(300, 0.12, 0.06, 'triangle', 600),
+  bounce: () => tone(200, 0.05, 0.08, 'triangle'),
+  score:  () => { tone(660, 0.1, 0.12); setTimeout(() => tone(880, 0.15, 0.12), 100); },
+  win:    () => [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.2, 0.15), i * 150)),
+};
+
+// ---------- 입력 ----------
+const keys = new Set();
+const P1KEYS = { left: 'KeyD', right: 'KeyG', up: 'KeyR', down: 'KeyF' };
+const P2KEYS = { left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp', down: 'ArrowDown' };
+const BLOCK = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Enter'];
+
+document.addEventListener('keydown', e => {
+  if (BLOCK.includes(e.code)) e.preventDefault();
+  keys.add(e.code);
+  if (e.repeat) return;
+  if ((state === 'menu' || state === 'gameover') && (e.code === 'Space' || e.code === 'Enter')) {
+    startGame(mode || 'cpu');
+    return;
+  }
+  if (e.code === 'KeyZ') players[0].hitQ = true;
+  if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+    if (mode === 'cpu') players[0].hitQ = true;
+    else players[1].hitQ = true;
+  }
+});
+document.addEventListener('keyup', e => keys.delete(e.code));
+window.addEventListener('blur', () => keys.clear());
+
+function humanInput(p) {
+  const sets = [];
+  if (p.side === 0) sets.push(P1KEYS);
+  if (p.side === 1 || mode === 'cpu') sets.push(P2KEYS);
+  const inp = { left: false, right: false, up: false, down: false, hit: p.hitQ };
+  for (const s of sets) {
+    for (const k of ['left', 'right', 'up', 'down']) if (keys.has(s[k])) inp[k] = true;
+  }
+  p.hitQ = false;
+  return inp;
+}
+
+// ---------- 게임 상태 ----------
+let mode = null;          // 'cpu' | 'pvp'
+let state = 'menu';       // menu | ready | playing | point | gameover
+let stateTimer = 0;
+let score = [0, 0];
+let server = 0;
+let lastScorer = -1;
+let shake = 0;
+let players, ball;
+const particles = [];
+const clouds = Array.from({ length: 6 }, (_, i) => ({
+  x: i * 150 + Math.random() * 80, y: 30 + Math.random() * 110, s: 0.6 + Math.random() * 0.8,
+}));
+
+function makePlayer(side) {
+  return {
+    side, x: side === 0 ? 120 : 680, y: GROUND - P_R, vy: 0,
+    onGround: true, power: 0, hitQ: false, inp: {}, cpu: false, aiOffset: 0, anim: 0,
+  };
+}
+
+function resetRound() {
+  for (const p of players) {
+    p.x = p.side === 0 ? 120 : 680;
+    p.y = GROUND - P_R; p.vy = 0; p.onGround = true; p.power = 0;
+    p.aiOffset = 4 + Math.random() * 22;
+  }
+  ball = {
+    x: server === 0 ? 120 : 680, y: 80, vx: 0, vy: 0,
+    rot: 0, power: 0, cool: [0, 0], trail: [],
+  };
+  state = 'ready';
+  stateTimer = 50;
+}
+
+function startGame(m) {
+  mode = m;
+  score = [0, 0];
+  server = Math.random() < 0.5 ? 0 : 1;
+  players = [makePlayer(0), makePlayer(1)];
+  players[1].cpu = m === 'cpu';
+  resetRound();
+}
+
+players = [makePlayer(0), makePlayer(1)];
+ball = { x: 400, y: 120, vx: 0, vy: 0, rot: 0, power: 0, cool: [0, 0], trail: [] };
+
+// ---------- 컴퓨터 AI ----------
+function predictLandingX() {
+  let x = ball.x, y = ball.y, vx = ball.vx, vy = ball.vy;
+  for (let i = 0; i < 400; i++) {
+    vy += B_GRAV; x += vx; y += vy;
+    if (x < B_R) { x = B_R; vx = -vx; }
+    if (x > W - B_R) { x = W - B_R; vx = -vx; }
+    if (y > NET_TOP && Math.abs(x - NET_X) < NET_W / 2 + B_R) {
+      vx = -vx;
+      x = x < NET_X ? NET_X - NET_W / 2 - B_R : NET_X + NET_W / 2 + B_R;
+    }
+    if (vy > 0 && y > GROUND - P_R * 2.2) return x;
+  }
+  return x;
+}
+
+function aiInput(p) {
+  const inp = { left: false, right: false, up: false, down: false, hit: false };
+  if (state !== 'playing' && state !== 'ready') return inp;
+
+  let target = 640;
+  const landX = predictLandingX();
+  if (landX > NET_X) target = landX + p.aiOffset; // 공 뒤쪽에 서서 네트 쪽으로 넘김
+  if (state === 'ready' && server === 1) target = ball.x + p.aiOffset;
+
+  if (p.x < target - 5) inp.right = true;
+  else if (p.x > target + 5) inp.left = true;
+
+  const dx = ball.x - p.x, dy = ball.y - p.y;
+  // 네트 근처에서 공이 떨어질 때 점프해서 스파이크 시도
+  if (state === 'playing' && p.onGround && ball.x > NET_X && Math.abs(dx) < 55 &&
+      ball.vy > 0 && dy > -200 && dy < -100 && ball.x < 620 && Math.random() < 0.25) {
+    inp.up = true;
+  }
+  if (!p.onGround && Math.hypot(dx, dy) < 85 && ball.x > NET_X) {
+    inp.hit = true;
+    const r = Math.random();
+    inp.down = r < 0.5;
+    inp.up = r > 0.85;
+    inp.left = Math.random() < 0.6;
+    inp.right = false;
+  }
+  return inp;
+}
+
+// ---------- 업데이트 ----------
+function updatePlayer(p) {
+  const inp = p.cpu ? aiInput(p) : humanInput(p);
+  p.inp = inp;
+
+  let dx = 0;
+  if (inp.left) dx -= 1;
+  if (inp.right) dx += 1;
+  p.x += dx * P_SPEED;
+  if (dx) p.anim += 0.3;
+
+  const minX = p.side === 0 ? P_R : NET_X + NET_W / 2 + P_R;
+  const maxX = p.side === 0 ? NET_X - NET_W / 2 - P_R : W - P_R;
+  p.x = Math.max(minX, Math.min(maxX, p.x));
+
+  if (inp.up && p.onGround) {
+    p.vy = P_JUMP;
+    p.onGround = false;
+    sfx.jump();
+  }
+  if (inp.hit && !p.onGround && p.power === 0) p.power = 16;
+
+  p.vy += P_GRAV;
+  p.y += p.vy;
+  if (p.y >= GROUND - P_R) {
+    p.y = GROUND - P_R;
+    p.vy = 0;
+    p.onGround = true;
+  }
+  if (p.power > 0) p.power--;
+}
+
+function hitBall(p) {
+  const dx = ball.x - p.x, dy = ball.y - p.y;
+  const d = Math.hypot(dx, dy);
+  if (d >= P_R + B_R || ball.cool[p.side] > 0) return;
+
+  ball.cool[p.side] = 10;
+  const n = d || 1;
+  ball.x = p.x + dx / n * (P_R + B_R);
+  ball.y = p.y + dy / n * (P_R + B_R);
+  const dir = p.side === 0 ? 1 : -1;
+
+  if (p.power > 0) {
+    // 스파이크
+    const inp = p.inp;
+    let vx = dir * 15, vy = 4;
+    if (inp.down) vy = 12;
+    else if (inp.up) vy = -10;
+    const fwd = (inp.right && dir === 1) || (inp.left && dir === -1);
+    const back = (inp.left && dir === 1) || (inp.right && dir === -1);
+    if (fwd) vx = dir * 19;
+    else if (back) vx = dir * 9;
+    ball.vx = vx;
+    ball.vy = vy;
+    ball.power = 40;
+    p.power = 0;
+    shake = 10;
+    sfx.spike();
+    burst(ball.x, ball.y, '#fff36b', 14);
+  } else {
+    ball.vx = Math.max(-9, Math.min(9, dx * 0.28 + (Math.random() - 0.5)));
+    ball.vy = -12 - Math.random() * 1.5;
+    ball.power = 0;
+    sfx.hit();
+  }
+}
+
+function updateBall() {
+  ball.vy += B_GRAV;
+  ball.vx = Math.max(-B_MAX, Math.min(B_MAX, ball.vx));
+  ball.vy = Math.max(-B_MAX, Math.min(B_MAX, ball.vy));
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+  ball.rot += ball.vx * 0.03;
+  ball.cool[0] = Math.max(0, ball.cool[0] - 1);
+  ball.cool[1] = Math.max(0, ball.cool[1] - 1);
+
+  if (ball.power > 0) {
+    ball.power--;
+    ball.trail.push({ x: ball.x, y: ball.y });
+  }
+  if (ball.trail.length > 10 || (ball.power === 0 && ball.trail.length)) ball.trail.shift();
+
+  // 벽, 천장
+  if (ball.x < B_R) { ball.x = B_R; ball.vx = Math.abs(ball.vx); sfx.bounce(); }
+  if (ball.x > W - B_R) { ball.x = W - B_R; ball.vx = -Math.abs(ball.vx); sfx.bounce(); }
+  if (ball.y < -200) { ball.y = -200; ball.vy = Math.abs(ball.vy); }
+
+  // 네트
+  const left = NET_X - NET_W / 2, right = NET_X + NET_W / 2;
+  const cx = Math.max(left, Math.min(right, ball.x));
+  const cy = Math.max(NET_TOP, Math.min(GROUND, ball.y));
+  if (Math.hypot(ball.x - cx, ball.y - cy) < B_R) {
+    if (ball.y < NET_TOP && ball.vy > 0) {
+      ball.y = NET_TOP - B_R;
+      ball.vy = -Math.abs(ball.vy) * 0.7;
+      if (Math.abs(ball.vx) < 1) ball.vx = (ball.x < NET_X ? -1 : 1) * 2;
+    } else if (ball.x < NET_X) {
+      ball.x = left - B_R;
+      ball.vx = -Math.abs(ball.vx) * 0.8;
+    } else {
+      ball.x = right + B_R;
+      ball.vx = Math.abs(ball.vx) * 0.8;
+    }
+    sfx.bounce();
+  }
+
+  for (const p of players) hitBall(p);
+
+  // 바닥 → 득점
+  if (ball.y + B_R >= GROUND) {
+    ball.y = GROUND - B_R;
+    const scorer = ball.x < NET_X ? 1 : 0;
+    score[scorer]++;
+    server = scorer;
+    lastScorer = scorer;
+    burst(ball.x, GROUND, '#d9b77a', 20);
+    shake = Math.max(shake, 6);
+    ball.trail = [];
+    if (score[scorer] >= WIN_SCORE) {
+      state = 'gameover';
+      sfx.win();
+    } else {
+      state = 'point';
+      stateTimer = 90;
+      sfx.score();
+    }
+  }
+}
+
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 1 + Math.random() * 4;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2, life: 30, color });
+  }
+}
+
+function update() {
+  for (const c of clouds) {
+    c.x += 0.2 * c.s;
+    if (c.x > W + 80) c.x = -80;
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const q = particles[i];
+    q.vy += 0.2; q.x += q.vx; q.y += q.vy;
+    if (--q.life <= 0) particles.splice(i, 1);
+  }
+  if (shake > 0) shake *= 0.85;
+  if (shake < 0.5) shake = 0;
+
+  if (state === 'menu' || state === 'gameover') return;
+
+  for (const p of players) updatePlayer(p);
+
+  if (state === 'ready') {
+    if (--stateTimer <= 0) state = 'playing';
+  } else if (state === 'playing') {
+    updateBall();
+  } else if (state === 'point') {
+    if (--stateTimer <= 0) resetRound();
+  }
+}
+
+// ---------- 그리기 ----------
+function drawBackground() {
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+  sky.addColorStop(0, '#4aa3df');
+  sky.addColorStop(1, '#bfe6ff');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, GROUND);
+
+  // 해
+  ctx.fillStyle = '#fff6b0';
+  ctx.beginPath();
+  ctx.arc(700, 60, 30, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 구름
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  for (const c of clouds) {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 18 * c.s, 0, Math.PI * 2);
+    ctx.arc(c.x + 20 * c.s, c.y - 8 * c.s, 22 * c.s, 0, Math.PI * 2);
+    ctx.arc(c.x + 42 * c.s, c.y, 18 * c.s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 모래사장
+  const sand = ctx.createLinearGradient(0, GROUND, 0, H);
+  sand.addColorStop(0, '#f0d28c');
+  sand.addColorStop(1, '#c9a35a');
+  ctx.fillStyle = sand;
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND + 1);
+  ctx.lineTo(W, GROUND + 1);
+  ctx.stroke();
+}
+
+function drawNet() {
+  // 기둥
+  ctx.fillStyle = '#ddd';
+  ctx.fillRect(NET_X - NET_W / 2, NET_TOP, NET_W, GROUND - NET_TOP);
+  ctx.fillStyle = '#c0392b';
+  for (let y = NET_TOP; y < GROUND; y += 24) {
+    ctx.fillRect(NET_X - NET_W / 2, y, NET_W, 12);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(NET_X, NET_TOP, NET_W / 2 + 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawShadow(x, size) {
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(x, GROUND + 6, size, size * 0.25, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawPikachu(p) {
+  const f = p.side === 0 ? 1 : -1; // 바라보는 방향
+  drawShadow(p.x, 28);
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.scale(f, 1);
+  const bob = p.onGround ? Math.sin(p.anim) * 2 : 0;
+  ctx.translate(0, -Math.abs(bob));
+  if (!p.onGround) ctx.rotate(p.vy * -0.01);
+
+  const OUT = '#4a3000';     // 외곽선
+  const YEL = '#f9d71c';     // 피카츄 노랑
+  const BROWN = '#8b5a2b';   // 꼬리 뿌리, 등 줄무늬
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = OUT;
+
+  // 스파이크 오라 + 전기 스파크
+  if (p.power > 0) {
+    ctx.fillStyle = `rgba(255,255,140,${0.2 + Math.random() * 0.2})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, 52, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff59d';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      let a = Math.random() * Math.PI * 2, r = 38;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+      for (let k = 0; k < 3; k++) {
+        r += 7;
+        a += (Math.random() - 0.5) * 0.7;
+        ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+      }
+      ctx.stroke();
+    }
+    ctx.strokeStyle = OUT;
+    ctx.lineWidth = 2.5;
+  }
+
+  // 꼬리 (번개 모양, 뿌리는 갈색)
+  const tail = [[-16, 20], [-30, 8], [-23, 2], [-40, -12], [-33, -17], [-58, -46], [-20, -27], [-27, -21], [-12, -8], [-19, -3], [-6, 12]];
+  ctx.beginPath();
+  ctx.moveTo(tail[0][0], tail[0][1]);
+  for (const [x, y] of tail) ctx.lineTo(x, y);
+  ctx.closePath();
+  ctx.fillStyle = YEL;
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = BROWN;
+  ctx.fillRect(-32, 3, 30, 20);
+  ctx.restore();
+  ctx.stroke();
+
+  // 귀 (길고 뾰족, 끝이 검정) — 머리 뒤에 그림
+  const ear = (bx, by, ang) => {
+    ctx.save();
+    ctx.translate(bx, by);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(-8, 4);
+    ctx.quadraticCurveTo(-11, -20, 0, -38);
+    ctx.quadraticCurveTo(11, -20, 8, 4);
+    ctx.closePath();
+    ctx.fillStyle = YEL;
+    ctx.fill();
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-14, -42, 28, 18);
+    ctx.restore();
+    ctx.stroke();
+    ctx.restore();
+  };
+  ear(-13, -26, -0.6); // 뒤쪽 귀
+  ear(9, -29, 0.15);   // 앞쪽 귀
+
+  // 발
+  ctx.fillStyle = YEL;
+  for (const fx of [-10, 14]) {
+    ctx.beginPath();
+    ctx.ellipse(fx, 30, 9, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // 몸통 (아래가 통통한 서양배 모양)
+  const bodyPath = () => {
+    ctx.beginPath();
+    ctx.ellipse(-2, 13, 24, 19, 0, 0, Math.PI * 2);
+  };
+  const bodyGrad = ctx.createRadialGradient(4, 4, 4, -2, 13, 28);
+  bodyGrad.addColorStop(0, '#fff176');
+  bodyGrad.addColorStop(1, '#f2c200');
+  bodyPath();
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+  // 등의 갈색 줄무늬 두 개
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = BROWN;
+  for (const sy of [6, 17]) {
+    ctx.beginPath();
+    ctx.ellipse(-25, sy, 9, 3.5, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  bodyPath();
+  ctx.stroke();
+
+  // 머리
+  const headPath = () => {
+    ctx.beginPath();
+    ctx.ellipse(4, -12, 25, 20, 0, 0, Math.PI * 2);
+  };
+  const headGrad = ctx.createRadialGradient(-2, -22, 4, 4, -12, 30);
+  headGrad.addColorStop(0, '#fff59d');
+  headGrad.addColorStop(1, '#f5c800');
+  headPath();
+  ctx.fillStyle = headGrad;
+  ctx.fill();
+  ctx.stroke();
+
+  // 빨간 볼 (머리 밖으로 삐져나오지 않게 잘라서)
+  ctx.save();
+  headPath();
+  ctx.clip();
+  ctx.fillStyle = '#e53935';
+  ctx.beginPath();
+  ctx.arc(25, -3, 6.5, 0, Math.PI * 2);
+  ctx.arc(-15, -3, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 눈 (까만 눈동자 + 흰 하이라이트)
+  for (const [ex, ey, rx, ry] of [[0, -15, 4, 5], [18, -15, 4.8, 5.8]]) {
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(ex + 1.3, ey - 2.2, rx * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 코
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(13, -8, 1.6, 1.1, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 입: 평소엔 ω, 스파이크 때는 크게 벌림
+  if (p.power > 0) {
+    ctx.fillStyle = '#b71c1c';
+    ctx.beginPath();
+    ctx.ellipse(13, -1, 4.5, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff8a80';
+    ctx.beginPath();
+    ctx.ellipse(13, 1.5, 3, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(10.5, -5, 2.5, 0.15, Math.PI - 0.15);
+    ctx.moveTo(18, -5);
+    ctx.arc(15.5, -5, 2.5, 0.15, Math.PI - 0.15);
+    ctx.stroke();
+    ctx.lineWidth = 2.5;
+  }
+
+  // 팔 (점프하면 들어올림)
+  ctx.fillStyle = YEL;
+  ctx.save();
+  if (p.onGround) {
+    ctx.translate(16, 10);
+    ctx.rotate(0.5);
+  } else {
+    ctx.translate(20, -2);
+    ctx.rotate(-0.7);
+  }
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 7, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function drawBall() {
+  drawShadow(ball.x, 16 * Math.max(0.4, ball.y / GROUND));
+
+  // 스파이크 잔상
+  ball.trail.forEach((t, i) => {
+    ctx.fillStyle = `rgba(255,240,120,${(i + 1) / ball.trail.length * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, B_R * (i + 1) / ball.trail.length, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.save();
+  ctx.translate(ball.x, ball.y);
+  ctx.rotate(ball.rot);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(0, 0, B_R, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#e74c3c';
+  ctx.beginPath();
+  ctx.arc(-B_R, 0, B_R * 1.1, -0.9, 0.9);
+  ctx.stroke();
+  ctx.strokeStyle = '#2e86de';
+  ctx.beginPath();
+  ctx.arc(B_R, 0, B_R * 1.1, Math.PI - 0.9, Math.PI + 0.9);
+  ctx.stroke();
+  ctx.strokeStyle = '#f1c40f';
+  ctx.beginPath();
+  ctx.arc(0, -B_R * 1.3, B_R * 1.1, 0.9, Math.PI - 0.9);
+  ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, B_R, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function outlinedText(text, x, y, size, color = '#fff') {
+  ctx.font = `bold ${size}px "Malgun Gothic", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = size / 6;
+  ctx.strokeStyle = '#2b2b2b';
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+function draw() {
+  ctx.save();
+  if (shake) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  drawBackground();
+  drawNet();
+
+  for (const p of players) drawPikachu(p);
+  if (state !== 'menu') drawBall();
+
+  for (const q of particles) {
+    ctx.globalAlpha = q.life / 30;
+    ctx.fillStyle = q.color;
+    ctx.fillRect(q.x - 2, q.y - 2, 4, 4);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  if (state === 'menu') {
+    outlinedText('⚡ 피카츄 배구 ⚡', W / 2, 150, 56, '#ffd93b');
+    outlinedText('위 버튼을 눌러 시작하세요', W / 2, 230, 24);
+    outlinedText('(Space: 1인용 바로 시작)', W / 2, 270, 18);
+    return;
+  }
+
+  // 점수
+  outlinedText(String(score[0]), 70, 45, 48, '#ffd93b');
+  outlinedText(String(score[1]), W - 70, 45, 48, '#ffd93b');
+  outlinedText(mode === 'cpu' ? '나' : '1P', 70, 85, 18);
+  outlinedText(mode === 'cpu' ? 'CPU' : '2P', W - 70, 85, 18);
+
+  if (state === 'ready') outlinedText('준비!', W / 2, 160, 40);
+  if (state === 'point') {
+    const who = lastScorer === 0 ? (mode === 'cpu' ? '나' : '1P') : (mode === 'cpu' ? 'CPU' : '2P');
+    outlinedText(`${who} 득점!`, W / 2, 160, 44, '#ffd93b');
+  }
+  if (state === 'gameover') {
+    const who = lastScorer === 0 ? (mode === 'cpu' ? '내가' : '1P가') : (mode === 'cpu' ? '컴퓨터가' : '2P가');
+    outlinedText(`${who} 이겼습니다! 🎉`, W / 2, 150, 48, '#ffd93b');
+    outlinedText('Space 또는 Enter로 다시 시작', W / 2, 210, 22);
+  }
+}
+
+// ---------- 루프 (60fps 고정) ----------
+let last = performance.now(), acc = 0;
+const STEP = 1000 / 60;
+function loop(now) {
+  acc += Math.min(now - last, 250);
+  last = now;
+  while (acc >= STEP) {
+    update();
+    acc -= STEP;
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---------- 버튼 ----------
+document.getElementById('start1').addEventListener('click', e => { e.target.blur(); startGame('cpu'); });
+document.getElementById('start2').addEventListener('click', e => { e.target.blur(); startGame('pvp'); });
+const soundBtn = document.getElementById('sound');
+soundBtn.addEventListener('click', () => {
+  soundOn = !soundOn;
+  soundBtn.textContent = soundOn ? '🔊 소리 켬' : '🔇 소리 끔';
+  soundBtn.blur();
+});
+</script>
+</body>
+</html>
